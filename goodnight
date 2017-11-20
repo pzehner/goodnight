@@ -1,0 +1,301 @@
+#!/bin/bash
+
+##
+# Main function
+#
+_goodnight () {
+        local debug=false
+
+
+        # parse arguments
+        local action
+        local -r stdout_default="log.out"
+        local -r stderr_default="log.err"
+        local -r stdin_default=/dev/null
+        local -r wait_pid_sleep=60
+        local stdout=$stdout_default
+        local stderr=$stderr_default
+        local stdin=$stdin_default
+        local stderr_redirect=false
+        local pid_to_wait=""
+        _parse_args "$@"
+
+        # read config
+        local recipient
+        local -r config_file="$HOME/.goodnightrc"
+        _read_config "$config_file"
+
+        # select mail command
+        local mail_command
+        if command -v sendmail >/dev/null 2>&1
+        then
+                mail_command=_sendmail
+                _debug "Select 'sendmail' for sending message"
+        elif command -v mail >/dev/null 2>&1
+        then
+                mail_command=_mail
+                _debug "Select 'mail' for sending message"
+        else
+                _error "Cannot find a mail command"
+                exit 1
+        fi
+
+        # do stuff
+        if $stderr_redirect
+        then
+                _do_action "$action" "$recipient" "$mail_command" >${stdout} 2>&1 <${stdin} &
+        else
+                _do_action "$action" "$recipient" "$mail_command" >${stdout} 2>${stderr} <${stdin} &
+        fi
+
+        # closing
+        _debug "Exit successfuly"
+}
+
+##
+# Read config file
+#
+_read_config () {
+        _debug "Read config file"
+
+        local config_file="$1"
+
+        # if the config file does not exist
+        if ! [[ -f $config_file ]]
+        then
+                touch $config_file
+                _error "No config file"
+                exit 1
+        fi
+
+        # if it exists, read it
+        local key
+        local value
+
+        while IFS=" = " read key value
+        do
+                case $key in
+                        recipient)
+                                recipient="$value"
+                                ;;
+                        *) # error case
+                                _error "Invalid key '${key}' in config file"
+                                exit 1
+                esac
+        done <$config_file
+
+        if [[ -z $recipient ]]
+        then
+                _error "Recipient undefined in config file"
+                exit 1
+        fi
+
+        _debug "Recipient: $recipient"
+}
+
+##
+# Parse arguments
+#
+_parse_args () {
+        local option
+
+        while getopts ":o:e:Ei:w:dh" option
+        do
+                case $option in
+                        o)
+                                stdout=$OPTARG
+                                ;;
+                        e)
+                                stderr=$OPTARG
+                                ;;
+                        E)
+                                stderr_redirect=true
+                                ;;
+                        i)
+                                stdin=$OPTARG
+                                ;;
+                        w)
+                                pid_to_wait=$OPTARG
+                                ;;
+                        h)
+                                echo help
+                                exit 0
+                                ;;
+                        d)
+                                debug=true
+                                # we only know the debug flag at this step of the program
+                                # so, we display the missed messages
+                                _debug "This is Goodnight"
+                                _debug "Parse command arguments"
+                                ;;
+                        *)
+                                _error "Unknown option '${option}'"
+                                exit 1
+                                ;;
+                esac
+        done
+
+        shift $((OPTIND - 1))
+        action="$@"
+
+        if [[ -z $action ]]
+        then
+                _error "No action specified"
+                exit 1
+        fi
+
+        if $stderr_redirect
+        then
+                stderr=$stdout
+        fi
+
+        _debug "Action: $action"
+        _debug "stdin: $stdin, stdout: $stdout, stderr: $stderr"
+}
+
+##
+# Execute the nohuped action
+#
+_do_action () {
+        trap "" HUP
+
+        local action="$1"
+        local recipient="$2"
+
+        # wait for PID to finish
+        if [[ $pid_to_wait != "" ]]
+        then
+                _wait_pid $pid_to_wait
+        fi
+
+        # initiate stdout stream
+        echo "Script started at $(date -R)"
+
+        # initiate stderr stream
+        if ! $stderr_redirect
+        then
+                >&2 echo "Script started at $(date -R)"
+        fi
+
+        # create messages
+        local subject
+        local message
+        local mail_command=$3
+        local subject_success="[Goodnight] Success: ${action}"
+        local message_success
+        read -r -d '' message_success << EOF
+Hey
+
+Your command "${action}" executed in "$PWD" successfully ended on %s.
+
+Goodnight
+EOF
+
+        local subject_failure="[Goodnight] Failure: ${action}"
+        local message_failure
+        read -r -d '' message_failure << EOF
+Hey
+
+Your command "${action}" executed in "$PWD" failed on %s.
+
+Goodnight
+EOF
+
+        # execute action
+        eval "$action"
+
+        # select message according to the outdraw of the command
+        if [[ $? == 0 ]] # success
+        then
+                subject="$subject_success"
+                message="$message_success"
+        else # failure
+                subject="$subject_failure"
+                message="$message_failure"
+        fi
+
+        # add date to message
+        message="$(printf "$message" "$(date -R)")"
+
+        # send message
+        $mail_command "$subject" "$recipient" "$message"
+
+        # close stdout stream
+        echo "Script ended at $(date -R)"
+
+        # close stderr stream
+        if ! $stderr_redirect
+        then
+                >&2 echo "Script ended at $(date -R)"
+        fi
+}
+
+##
+# Wait for PID to be terminated
+#
+_wait_pid () {
+        local pid=$1
+
+        while /bin/ps -p $pid >/dev/null
+        do
+                sleep $wait_pid_sleep
+        done
+}
+
+##
+# Send mail with sendmail command
+#
+_sendmail () {
+        local subject="$1"
+        local recipient="$2"
+        local text="$3"
+
+        sendmail "$recipient" << EOF
+Subject: $subject
+To: $recipient
+Date: $(date -R)
+
+$text
+EOF
+
+}
+
+##
+# Send mail with mail command
+#
+_mail () {
+        local subject="$1"
+        local recipient="$2"
+        local text="$3"
+
+        mail -s "$subject" "$recipient" << EOF
+$text
+EOF
+
+}
+
+##
+# Show debug line
+#
+_debug () {
+        if $debug
+        then
+                >&2 echo "$(tput sgr 0)[$(tput setaf 6)DEBUG$(tput sgr 0)] $@"
+        fi
+}
+
+##
+# Show error line
+#
+_error () {
+        >&2 echo "$(tput sgr 0; tput bold)[$(tput setaf 1)ERROR$(tput setaf 9)] $@$(tput sgr 0)"
+}
+
+##
+# Show warning line
+#
+_warn () {
+        >&2 echo "$(tput sgr 0)[$(tput setaf 3; tput bold)WARNING$(tput sgr 0)] $@"
+}
+
+_goodnight $@
