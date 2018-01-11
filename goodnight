@@ -8,6 +8,8 @@ _goodnight () {
 
         # arguments variables
         local action
+        local debug=false
+        local send_mail=true
         local -r stdout_default="log.out"
         local -r stderr_default="log.err"
         local -r stdin_default=/dev/null
@@ -102,7 +104,7 @@ _read_config () {
 _parse_args () {
         local option
 
-        while getopts ":o:e:Ei:w:dh" option
+        while getopts ":o:e:Ei:w:Mdh" option
         do
                 case $option in
                         o)
@@ -119,6 +121,9 @@ _parse_args () {
                                 ;;
                         w)
                                 pid_to_wait=$OPTARG
+                                ;;
+                        M)
+                                send_mail=false
                                 ;;
                         h)
                                 _help_command_line
@@ -167,7 +172,7 @@ _parse_args () {
 #
 _help_command_line () {
         cat << EOF
-goodnight [-o STDOUT] [-e STDERR | -E] [-i STDIN] [-w PID] [-h] [-d] COMMAND
+goodnight [-o STDOUT] [-e STDERR | -E] [-i STDIN] [-w PID] [-M] [-h] [-d] COMMAND
 
 Bash tool to launch a disowned command that'll kindly send you a message when
 done. Like 'nohup my_command </dev/null >log 2>&1 &' but with a simpler
@@ -193,6 +198,8 @@ interface and some fancy features.
         with 'ps' or by the second column of 'ps aux | grep
         my_command_to_wait'.
         More details in the following paragraph.
+    -M
+        Do not send a mail when the command is terminated.
     -h
         Show this help and exit.
     -d
@@ -262,7 +269,12 @@ _do_action () {
         local mail_command=$3
         local subject_success="[Goodnight] Success: ${action}"
         local message_success
-        read -r -d '' message_success << EOF
+        local subject_failure="[Goodnight] Failure: ${action}"
+        local message_failure
+
+        if $send_mail
+        then
+                read -r -d '' message_success << EOF
 Hey
 
 Your command "${action}" executed in "$PWD" successfully ended on %s.
@@ -270,34 +282,36 @@ Your command "${action}" executed in "$PWD" successfully ended on %s.
 Goodnight
 EOF
 
-        local subject_failure="[Goodnight] Failure: ${action}"
-        local message_failure
-        read -r -d '' message_failure << EOF
+                read -r -d '' message_failure << EOF
 Hey
 
 Your command "${action}" executed in "$PWD" failed on %s.
 
 Goodnight
 EOF
+        fi
 
         # execute action
         eval "$action"
 
-        # select message according to the outdraw of the command
-        if [[ $? == 0 ]] # success
+        if $send_mail
         then
-                subject="$subject_success"
-                message="$message_success"
-        else # failure
-                subject="$subject_failure"
-                message="$message_failure"
+                # select message according to the outdraw of the command
+                if [[ $? == 0 ]] # success
+                then
+                        subject="$subject_success"
+                        message="$message_success"
+                else # failure
+                        subject="$subject_failure"
+                        message="$message_failure"
+                fi
+
+                # add date to message
+                message="$(printf "$message" "$(date -R)")"
+
+                # send message
+                $mail_command "$subject" "$recipient" "$message"
         fi
-
-        # add date to message
-        message="$(printf "$message" "$(date -R)")"
-
-        # send message
-        $mail_command "$subject" "$recipient" "$message"
 
         # close stdout stream
         echo "Script ended at $(date -R)"
