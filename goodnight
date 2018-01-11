@@ -180,6 +180,8 @@ interface and some fancy features.
 
     COMMAND
         Command to launch, with its own arguments.
+        Be careful, if the command is an executable in the current directory,
+        prepend its name with './'.
     -o STDOUT
         Where to redirect the standard output to.
         Default to '${stdout_default}'.
@@ -227,10 +229,15 @@ EOF
 _help_extra () {
         cat << EOF
 When invoking Goodnight with '-w', the command to wait must be running at the
-time Goodnight is called. To chain a command to another one which has been
-already invoked through 'goodnight -w some_other_command_pid', you can use this
+time Goodnight is called. If the provided PID is not found, the command is
+launched immediately. To chain a command to another one which has been already
+invoked through 'goodnight -w some_other_command_pid', you can use this
 command's Goodnight's PID. The PID can be obtained with 'ps' or 'pstree -p'.
 Goodnight checks if the PID to wait exists every ${wait_pid_sleep} seconds.
+Consequently, a delay may exist between the termination of the command to wait
+and the launch of the actual command. For now, it is not possible do
+conditionnaly launch the actual command (ie: only when the command to wait has
+succeeded).
 
 Goodnight can send you a mail when the command is terminated, wether
 successfuly or unsuccessfuly. It can use the 'sendmail' or the 'mail' command,
